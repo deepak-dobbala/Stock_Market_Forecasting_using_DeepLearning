@@ -5,111 +5,92 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 
+def new_func():
+    return 1
+    
 def fetch_data(tickers, start_date, end_date):
     """
     Fetch stock data for multiple tickers and return a dictionary of DataFrames.
-    
-    Parameters:
-    -----------
-    tickers : list
-        List of stock ticker symbols
-    start_date : str
-        Start date in 'YYYY-MM-DD' format
-    end_date : str
-        End date in 'YYYY-MM-DD' format
-        
-    Returns:
-    --------
-    dict
-        Dictionary with tickers as keys and their respective DataFrames as values
     """
     data = {}
-    
     for ticker in tickers:
-        # Download data for each ticker
         df = yf.download(ticker, start=start_date, end=end_date)
         data[ticker] = df
-    
     return data
 
-def normalize_data(data_dict, columns=None, method='first_value', scale=100):
+def normalize_data(df, method='first_value', columns=None):
     """
     Normalize stock data using different methods.
     
     Parameters:
     -----------
-    data_dict : dict
-        Dictionary containing DataFrames for each ticker
-    columns : list, optional
-        List of columns to normalize. If None, normalizes all numeric columns
+    df : pandas.DataFrame
+        Input DataFrame containing stock market data
     method : str, optional (default='first_value')
         Normalization method:
-        - 'first_value': Divide by first value and multiply by scale
-        - 'min_max': Min-max scaling to [0, scale]
-        - 'zscore': Standardize to zero mean and unit variance
-    scale : float, optional (default=100)
-        Scale factor for normalization
+        - 'first_value': Normalize by first value (percentage change)
+        - 'minmax': Min-max scaling to [0, 1]
+        - 'zscore': Z-score normalization
+        - 'percentage': Percentage change from previous value
+    columns : list, optional
+        List of columns to normalize. If None, uses all numeric columns
         
     Returns:
     --------
-    dict
-        Dictionary containing normalized DataFrames
+    pandas.DataFrame
+        DataFrame with normalized columns added with '_norm' suffix
     """
-    normalized_data = {}
+    if columns is None:
+        columns = df.select_dtypes(include=[np.number]).columns
     
-    for ticker, df in data_dict.items():
-        if columns is None:
-            columns = df.select_dtypes(include=[np.number]).columns
-        
-        normalized_df = df.copy()
-        
-        for column in columns:
-            if method == 'first_value':
-                # Normalize by first value (like your reference code)
-                normalized_df[f'{column}_normalized'] = df[column].div(df[column].iloc[0]).mul(scale)
-            
-            elif method == 'min_max':
-                # Min-max scaling
-                min_val = df[column].min()
-                max_val = df[column].max()
-                normalized_df[f'{column}_normalized'] = (df[column] - min_val) / (max_val - min_val) * scale
-            
-            elif method == 'zscore':
-                # Z-score normalization
-                mean = df[column].mean()
-                std = df[column].std()
-                normalized_df[f'{column}_normalized'] = (df[column] - mean) / std
-        
-        normalized_data[ticker] = normalized_df
+    df_normalized = df.copy()
     
-    return normalized_data
+    for column in columns:
+        if method == 'first_value':
+            # Normalize by first value (like reference code)
+            df_normalized[f'{column}_norm'] = df[column].div(df[column].iloc[0]).mul(100)
+            
+        elif method == 'minmax':
+            # Min-max normalization
+            min_val = df[column].min()
+            max_val = df[column].max()
+            df_normalized[f'{column}_norm'] = (df[column] - min_val) / (max_val - min_val)
+            
+        elif method == 'zscore':
+            # Z-score normalization
+            mean = df[column].mean()
+            std = df[column].std()
+            df_normalized[f'{column}_norm'] = (df[column] - mean) / std
+            
+        elif method == 'percentage':
+            # Percentage change
+            df_normalized[f'{column}_norm'] = df[column].pct_change() * 100
+    
+    return df_normalized
 
-def plot_normalized_data(normalized_data, column, tickers=None):
+def plot_normalized_prices(data_dict, column='Close', method='first_value'):
     """
-    Plot normalized values for comparison across different stocks.
+    Plot normalized prices for multiple stocks.
     
     Parameters:
     -----------
-    normalized_data : dict
-        Dictionary containing normalized DataFrames
-    column : str
-        Column to plot (without '_normalized' suffix)
-    tickers : list, optional
-        List of tickers to plot. If None, plots all tickers
+    data_dict : dict
+        Dictionary of DataFrames containing stock data
+    column : str, optional (default='Close')
+        Column to normalize and plot
+    method : str, optional (default='first_value')
+        Normalization method to use
     """
     plt.figure(figsize=(15, 7))
     
-    if tickers is None:
-        tickers = list(normalized_data.keys())
+    for ticker, df in data_dict.items():
+        normalized_df = normalize_data(df, method=method, columns=[column])
+        normalized_df[f'{column}_norm'].plot(label=ticker)
     
-    for ticker in tickers:
-        df = normalized_data[ticker]
-        normalized_column = f'{column}_normalized'
-        if normalized_column in df.columns:
-            df[normalized_column].plot()
-    
-    plt.title(f'Normalized {column} Values Comparison')
-    plt.legend(tickers)
+    plt.title(f'Normalized {column} Prices ({method} normalization)')
+    plt.xlabel('Date')
+    plt.ylabel('Normalized Value')
+    plt.legend()
     plt.grid(True)
     plt.show()
 
