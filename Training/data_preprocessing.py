@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 from sklearn.preprocessing import MinMaxScaler
+import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.layers import GRU
@@ -699,81 +700,66 @@ def plot_gru_results(history, y_test, predictions, title="Stock Price Prediction
     plt.show()
  
 import numpy as np
-import pandas as pd
-import yfinance as yf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
-from tensorflow.keras.losses import MeanSquaredError
-from tensorflow.keras.metrics import MeanAbsoluteError, MeanSquaredError, RootMeanSquaredError
+import tensorflow as tf
+from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.optimizers import Adam
-from tensorflow.data.experimental import AUTOTUNE
-import tensorflow_probability as tfp
-from tensorflow.keras.layers import RandomFlip, RandomRotation  # Or any other layer
-from sklearn import preprocessing
+from tensorflow.keras.losses import MeanSquaredError
 
-def predict_stock_prices_tft(df, target_col='Close', sequence_length=60, train_split=0.8, num_features=1, num_heads=1, d_model=32, num_layers=2, dropout=0.2):
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.optimizers import Adam
+
+def predict_stock_prices_tft(
+    df, target_col='Close', sequence_length=60, train_split=0.8, num_features=1,
+    num_heads=1, d_model=32, num_layers=2, dropout=0.2
+):
     """
-    Complete pipeline for stock price prediction using Temporal Fusion Transformer (TFT).
-    
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        DataFrame containing stock data
-    target_col : str, optional (default='Close')
-        Target column for prediction
-    sequence_length : int, optional (default=60)
-        Number of time steps to look back
-    train_split : float, optional (default=0.8)
-        Proportion of data to use for training
-    num_features : int, optional (default=1)
-        Number of input features
-    num_heads : int, optional (default=1)
-        Number of attention heads
-    d_model : int, optional (default=32)
-        Dimensionality of the model
-    num_layers : int, optional (default=2)
-        Number of layers in the TFT
-    dropout : float, optional (default=0.2)
-        Dropout rate
-        
-    Returns:
-    --------
-    dict
-        Dictionary containing model, history, predictions, and evaluation metrics
+    Improved pipeline for stock price prediction using Temporal Fusion Transformer (TFT).
     """
     print("Processing data...")
-    
+
+    # Check for missing values
+    if df.isnull().any().any():
+        df.fillna(method='ffill', inplace=True)  # Forward-fill missing values
+
+    # Feature engineering
+    df['SMA_20'] = df[target_col].rolling(window=20).mean()  # 20-day SMA
+    df['RSI'] = calculate_rsi(df[target_col])
+    df['DayOfWeek'] = df.index.dayofweek  # Day of the week (0=Monday)
+    df = df.dropna()  # Drop rows with NaN after rolling window
+
     # Prepare data
-    scaler = preprocessing.StandardScaler()
-    scaled_data = scaler.fit_transform(np.array(df[[target_col]]))
-    
-    # Create sequences
+    scaler = StandardScaler()
+    features = [target_col, 'SMA_20', 'RSI']
+    scaled_data = scaler.fit_transform(df[features].values)
+
     X, y = [], []
     for i in range(len(scaled_data) - sequence_length):
         X.append(scaled_data[i:(i + sequence_length)])
-        y.append(scaled_data[i + sequence_length])
+        y.append(scaled_data[i + sequence_length, 0])  # Target is the first feature
+
     X, y = np.array(X), np.array(y)
-    
-    # Split into train and test sets
+
+    # Split data into train and test sets
     train_size = int(len(X) * train_split)
     X_train, X_test = X[:train_size], X[train_size:]
     y_train, y_test = y[:train_size], y[train_size:]
-    
-    # Create and train model
-    model = create_tft_model(num_features, num_heads, d_model, num_layers, dropout)
+
+    # Build and train the model
+    model = create_tft_model(sequence_length, len(features), num_heads, d_model, num_layers, dropout)
     history = train_tft_model(model, X_train, y_train)
-    
+
     # Make predictions
     predictions = model.predict(X_test)
-    
+
     # Inverse transform predictions and actual values
-    predictions = scaler.inverse_transform(predictions)
-    y_test_actual = scaler.inverse_transform(y_test)
-    
+    predictions = scaler.inverse_transform(np.hstack([predictions, np.zeros((len(predictions), len(features) - 1))]))[:, 0]
+    y_test_actual = scaler.inverse_transform(np.hstack([y_test.reshape(-1, 1), np.zeros((len(y_test), len(features) - 1))]))[:, 0]
+
     # Evaluate predictions
     metrics = evaluate_tft_predictions(y_test_actual, predictions)
-    
+
     # Store results
     results = {
         'model': model,
@@ -783,128 +769,80 @@ def predict_stock_prices_tft(df, target_col='Close', sequence_length=60, train_s
         'metrics': metrics,
         'scaler': scaler
     }
-    
+
     # Print metrics
     print("\nModel Performance Metrics:")
     for metric, value in metrics.items():
         print(f"{metric.upper()}: {value:.4f}")
-    
+
     return results
 
-def create_tft_model(num_features, num_heads, d_model, num_layers, dropout):
-    """
-    Create a Temporal Fusion Transformer (TFT) model.
-    
-    Parameters:
-    -----------
-    num_features : int
-        Number of input features
-    num_heads : int
-        Number of attention heads
-    d_model : int
-        Dimensionality of the model
-    num_layers : int
-        Number of layers in the TFT
-    dropout : float
-        Dropout rate
-        
-    Returns:
-    --------
-    tf.keras.models.Model
-        TFT model
-    """
+
+def create_tft_model(sequence_length, num_features, num_heads=4, d_model=64, num_layers=4, dropout=0.3):
     inputs = tf.keras.Input(shape=(sequence_length, num_features))
-    
-    # Preprocessing
-    preprocessing_layer = preprocessing.Normalization()
-    preprocessed_inputs = preprocessing_layer(inputs)
-    
-    # Encoder
-    encoder_layers = [
-        tfp.layers.TemporalFusionLayer(
-            num_heads=num_heads,
-            d_model=d_model,
-            dropout=dropout,
-            name="encoder_layer_{}".format(i)
-        )
-        for i in range(num_layers)
-    ]
-    encoder_outputs = tf.keras.layers.Stack()(encoder_layers)(preprocessed_inputs)
-    
-    # Decoder
-    decoder_layers = [
-        tf.keras.layers.Dense(num_features)
-    ]
-    decoder_outputs = tf.keras.layers.Stack()(decoder_layers)(encoder_outputs)
-    
-    # Model
-    model = tf.keras.models.Model(inputs=inputs, outputs=decoder_outputs)
-    
+
+    x = inputs
+    for _ in range(num_layers):
+        # Multi-Head Attention
+        attention_output = tf.keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=d_model)(x, x)
+        attention_output = tf.keras.layers.Dropout(dropout)(attention_output)
+        x = tf.keras.layers.LayerNormalization(epsilon=1e-6)(x + attention_output)
+
+        # Feed-Forward Network
+        feed_forward = tf.keras.Sequential([
+            tf.keras.layers.Dense(d_model, activation='relu'),
+            tf.keras.layers.Dropout(dropout),
+            tf.keras.layers.Dense(num_features)
+        ])
+        x = tf.keras.layers.LayerNormalization(epsilon=1e-6)(x + feed_forward(x))
+
+    outputs = tf.keras.layers.Dense(1)(x[:, -1, :])  # Predict the last time step
+
+    model = tf.keras.models.Model(inputs=inputs, outputs=outputs)
+    model.compile(optimizer=Adam(learning_rate=0.0005), loss='mse')
     return model
 
-def train_tft_model(model, X_train, y_train):
+def train_tft_model(model, X_train, y_train, batch_size=32, epochs=50):
     """
     Train the Temporal Fusion Transformer (TFT) model.
-    
-    Parameters:
-    -----------
-    model : tf.keras.models.Model
-        TFT model
-    X_train : np.array
-        Training input data
-    y_train : np.array
-        Training target data
-        
-    Returns:
-    --------
-    tf.keras.callbacks.History
-        Training history
     """
-    loss_object = MeanSquaredError()
-    optimizer = Adam()
-    
-    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train)).batch(batch_size)
-    
-    @tf.function
-    def train_step(inputs, targets):
-        with tf.GradientTape() as tape:
-            predictions = model(inputs)
-            loss = loss_object(targets, predictions)
-        gradients = tape.gradient(loss, model.trainable_variables)
-        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-        return loss
-    
-    epochs = 100
-    for epoch in range(epochs):
-        for step, (x_batch, y_batch) in enumerate(train_dataset):
-            loss = train_step(x_batch, y_batch)
-    
-    history = tf.keras.callbacks.History()
-    history.epoch = list(range(epochs))
-    history.history = {"loss": [loss.numpy() for _ in range(epochs)]}
-    
+    history = model.fit(
+        X_train, y_train,
+        batch_size=batch_size,
+        epochs=epochs,
+        validation_split=0.2,
+        verbose=1
+    )
     return history
+
 
 def evaluate_tft_predictions(y_test_actual, predictions):
     """
-    Evaluate the predictions made by the Temporal Fusion Transformer (TFT) model.
-    
-    Parameters:
-    -----------
-    y_test_actual : np.array
-        Actual target values
-    predictions : np.array
-        Predicted values
-        
-    Returns:
-    --------
-    dict
-        Dictionary containing evaluation metrics
+    Evaluate the predictions with multiple metrics.
     """
+    mae = np.mean(np.abs(y_test_actual - predictions))
+    mse = np.mean(np.square(y_test_actual - predictions))
+    rmse = np.sqrt(mse)
+    mape = np.mean(np.abs((y_test_actual - predictions) / y_test_actual)) * 100
+
     metrics = {
-        "mean_absolute_error": tf.keras.metrics.MeanAbsoluteError()(y_test_actual, predictions),
-        "mean_squared_error": tf.keras.metrics.MeanSquaredError()(y_test_actual, predictions),
-        "root_mean_squared_error": tf.keras.metrics.RootMeanSquaredError()(y_test_actual, predictions)
+        "mean_absolute_error": mae,
+        "mean_squared_error": mse,
+        "root_mean_squared_error": rmse,
+        "mean_absolute_percentage_error": mape
     }
-    
+
     return metrics
+
+
+def calculate_rsi(series, period=14):
+    """
+    Calculate Relative Strength Index (RSI).
+    """
+    delta = series.diff(1)
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
