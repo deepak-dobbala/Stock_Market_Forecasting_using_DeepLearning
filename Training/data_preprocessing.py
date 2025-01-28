@@ -709,14 +709,11 @@ from sklearn.preprocessing import StandardScaler
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
-
+"""
 def predict_stock_prices_tft(
     df, target_col='Close', sequence_length=60, train_split=0.8, num_features=1,
     num_heads=1, d_model=32, num_layers=2, dropout=0.2
 ):
-    """
-    Improved pipeline for stock price prediction using Temporal Fusion Transformer (TFT).
-    """
     print("Processing data...")
 
     # Check for missing values
@@ -802,10 +799,7 @@ def create_tft_model(sequence_length, num_features, num_heads=4, d_model=64, num
     model.compile(optimizer=Adam(learning_rate=0.0005), loss='mse')
     return model
 
-def train_tft_model(model, X_train, y_train, batch_size=32, epochs=50):
-    """
-    Train the Temporal Fusion Transformer (TFT) model.
-    """
+def train_tft_model(model, X_train, y_train, batch_size=32, epochs=50):=
     history = model.fit(
         X_train, y_train,
         batch_size=batch_size,
@@ -817,9 +811,6 @@ def train_tft_model(model, X_train, y_train, batch_size=32, epochs=50):
 
 
 def evaluate_tft_predictions(y_test_actual, predictions):
-    """
-    Evaluate the predictions with multiple metrics.
-    """
     mae = np.mean(np.abs(y_test_actual - predictions))
     mse = np.mean(np.square(y_test_actual - predictions))
     rmse = np.sqrt(mse)
@@ -836,9 +827,6 @@ def evaluate_tft_predictions(y_test_actual, predictions):
 
 
 def calculate_rsi(series, period=14):
-    """
-    Calculate Relative Strength Index (RSI).
-    """
     delta = series.diff(1)
     gain = delta.where(delta > 0, 0).rolling(window=period).mean()
     loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
@@ -846,3 +834,5 @@ def calculate_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
+
+"""
