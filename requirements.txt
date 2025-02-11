@@ -1,5 +1,22 @@
-flask
-tensorflow
+# Web Framework
+Flask
+
+# Data Processing and Analysis
 pandas
 numpy
 yfinance
+
+# Machine Learning and Deep Learning
+torch
+pytorch-forecasting
+scikit-learn
+
+# Visualization
+matplotlib
+
+# Testing
+pytest
+unittest2
+
+# Logging and Utilities
+python-dateutil
