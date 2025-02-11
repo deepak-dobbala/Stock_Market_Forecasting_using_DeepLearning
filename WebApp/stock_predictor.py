@@ -60,11 +60,10 @@ class StockPredictor:
             # Calculate technical indicators
             df['MA7'] = df['Close'].rolling(window=7).mean()
             df['MA21'] = df['Close'].rolling(window=21).mean()
-            df['RSI'] = self.calculate_rsi(df['Close'])
             
             # Normalize numerical features
             scaler = MinMaxScaler()
-            numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'MA7', 'MA21', 'RSI']
+            numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'MA7', 'MA21']
             df[numeric_cols] = scaler.fit_transform(df[numeric_cols].fillna(0))
             
             return df
@@ -72,20 +71,33 @@ class StockPredictor:
             logger.error(f"Error preparing data: {str(e)}")
             return None
 
-    def calculate_rsi(self, prices, periods=14):
-        """Calculate RSI technical indicator"""
-        delta = prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
-
     def load_model(self, company_code):
         """Load the trained model from the Models folder"""
         try:
             model_path = os.path.join(self.models_dir, f'model_{company_code.lower()}.pth')
+            logger.info(f"Attempting to load model from: {model_path}")
+            
+            # Check if Models directory exists
+            if not os.path.exists(self.models_dir):
+                logger.error(f"Models directory not found at: {self.models_dir}")
+                os.makedirs(self.models_dir)
+                logger.info(f"Created Models directory at: {self.models_dir}")
+                return None, None
+            
+            # Check if model file exists
             if not os.path.exists(model_path):
-                logger.error(f"Model not found: {model_path}")
+                logger.error(f"Model file not found at: {model_path}")
+                logger.error(f"Please ensure model_{company_code.lower()}.pth exists in the Models directory")
+                return None, None
+            
+            logger.info(f"Found model file of size: {os.path.getsize(model_path)} bytes")
+            
+            try:
+                # Try to load the model file
+                state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+                logger.info("Successfully loaded model state dict")
+            except Exception as e:
+                logger.error(f"Error loading model file: {str(e)}")
                 return None, None
             
             # Create dataset parameters
@@ -100,7 +112,6 @@ class StockPredictor:
                     'Volume': [0.0] * 120,
                     'MA7': [0.0] * 120,
                     'MA21': [0.0] * 120,
-                    'RSI': [0.0] * 120,
                     'month': [1] * 120,
                     'day_of_week': [1] * 120
                 }),
@@ -113,7 +124,7 @@ class StockPredictor:
                 time_varying_known_reals=["month", "day_of_week"],
                 time_varying_unknown_reals=[
                     "Close", "Open", "High", "Low", "Volume",
-                    "MA7", "MA21", "RSI"
+                    "MA7", "MA21"
                 ],
                 target_normalizer=GroupNormalizer(
                     groups=["group"],
@@ -132,13 +143,16 @@ class StockPredictor:
                 loss=QuantileLoss()
             )
             
-            # Load trained weights
-            model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+            # Load the trained weights
+            model.load_state_dict(state_dict)
             model.eval()
             
+            logger.info("Successfully initialized and loaded model")
             return model, training
+
         except Exception as e:
-            logger.error(f"Error loading model: {str(e)}")
+            logger.error(f"Error in load_model: {str(e)}")
+            logger.exception("Full traceback:")
             return None, None
 
     def generate_predictions(self, model, training, data):
