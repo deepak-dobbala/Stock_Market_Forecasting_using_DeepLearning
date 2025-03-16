@@ -14,6 +14,8 @@ from pytorch_forecasting import TimeSeriesDataSet, GroupNormalizer
 from pytorch_forecasting.data import GroupNormalizer
 from pytorch_forecasting.metrics import QuantileLoss
 from sklearn.preprocessing import MinMaxScaler
+from config import CONFIG
+from exceptions import ModelError, DataError
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -28,10 +30,11 @@ app.secret_key = 'your_secret_key_here'  # Required for flash messages
 # Dictionary mapping company codes to their full names
 COMPANIES = {
     'GOOGL': 'Google',
-    'MSFT': 'Microsoft',
+    'AMZN': 'Amazon',  # Added Amazon
     'IBM': 'IBM',
     'AAPL': 'Apple'
 }
+
 
 def prepare_data_for_prediction(company_code):
     """Prepare the last 120 days of data for prediction"""
@@ -119,14 +122,14 @@ def load_model(company_code):
 
         # Initialize model
         model = TemporalFusionTransformer.from_dataset(
-            training,
-            learning_rate=0.001,
-            hidden_size=64,
-            attention_head_size=4,
-            dropout=0.3,
-            hidden_continuous_size=32,
-            loss=QuantileLoss(),
-        )
+        training,
+        learning_rate=0.001,
+        hidden_size=128,        # Updated from 64
+        attention_head_size=8,  # Updated from 4
+        dropout=0.5,           # Updated from 0.3
+        hidden_continuous_size=64,  # Updated from 32
+        loss=QuantileLoss()
+    )
 
         # Load the trained weights
         model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))

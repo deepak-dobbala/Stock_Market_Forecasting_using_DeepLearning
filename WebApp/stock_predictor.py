@@ -11,24 +11,58 @@ import logging
 import io
 import base64
 from sklearn.preprocessing import MinMaxScaler
+import logging
+import os
+from config import CONFIG
+from exceptions import ModelError, DataError
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+def setup_logger():
+    """Configure logging with enhanced formatting"""
+    log_file = os.path.join(os.path.dirname(__file__), 'stock_predictor.log')
+    
+    formatter = logging.Formatter(
+        '%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] - %(message)s'
+    )
+    
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(formatter)
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+logger = setup_logger()
 
 class StockPredictor:
+    # Update COMPANIES dictionary
     def __init__(self):
         self.current_dir = os.path.dirname(os.path.abspath(__file__))
         self.models_dir = os.path.join(self.current_dir, 'Models')
         
-        # Available companies
+        # Available companies - Updated list
         self.COMPANIES = {
             'GOOGL': 'Google',
-            'MSFT': 'Microsoft',
+            'AMZN': 'Amazon',  # Added Amazon
             'IBM': 'IBM',
             'AAPL': 'Apple'
         }
+        self.model_version = "1.0.0"
+        self.model_configs = {
+            'GOOGL': {'timestamp': None, 'metrics': None},
+            'AAPL': {'timestamp': None, 'metrics': None},
+            'IBM': {'timestamp': None, 'metrics': None},
+            'AMZN': {'timestamp': None, 'metrics': None}
+        }
+    from functools import lru_cache
 
+    @lru_cache(maxsize=32)
     def fetch_historical_data(self, company_code):
         """Fetch the last 120 days of historical data"""
         try:
@@ -49,24 +83,30 @@ class StockPredictor:
     def prepare_data(self, df, company_code):
         """Prepare data for the model"""
         try:
-            # Add necessary columns
+            logger.info(f"Preparing data for {company_code}")
+            
+            # Add company code to column names
+            df = df.copy()
+            for col in ['Close', 'High', 'Low']:
+                df[f'{col}_{company_code}'] = df[col]
+                
+            # Add time features
             df['time_idx'] = range(len(df))
             df['group'] = company_code
-            
-            # Create features
+            df['year'] = df['Date'].dt.year
             df['month'] = df['Date'].dt.month
             df['day_of_week'] = df['Date'].dt.dayofweek
             
             # Calculate technical indicators
-            df['MA7'] = df['Close'].rolling(window=7).mean()
-            df['MA21'] = df['Close'].rolling(window=21).mean()
+            df['MA7'] = df[f'Close_{company_code}'].rolling(window=7).mean()
+            df['MA21'] = df[f'Close_{company_code}'].rolling(window=21).mean()
             
-            # Normalize numerical features
-            scaler = MinMaxScaler()
-            numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'MA7', 'MA21']
-            df[numeric_cols] = scaler.fit_transform(df[numeric_cols].fillna(0))
+            # Forward fill any missing values
+            df = df.fillna(method='ffill')
             
+            logger.info(f"Final data shape: {df.shape}")
             return df
+            
         except Exception as e:
             logger.error(f"Error preparing data: {str(e)}")
             return None
@@ -74,87 +114,92 @@ class StockPredictor:
     def load_model(self, company_code):
         """Load the trained model from the Models folder"""
         try:
+            logger.info(f"Loading model for {company_code}")
             model_path = os.path.join(self.models_dir, f'model_{company_code.lower()}.pth')
-            logger.info(f"Attempting to load model from: {model_path}")
             
-            # Check if Models directory exists
-            if not os.path.exists(self.models_dir):
-                logger.error(f"Models directory not found at: {self.models_dir}")
-                os.makedirs(self.models_dir)
-                logger.info(f"Created Models directory at: {self.models_dir}")
-                return None, None
-            
-            # Check if model file exists
             if not os.path.exists(model_path):
-                logger.error(f"Model file not found at: {model_path}")
-                logger.error(f"Please ensure model_{company_code.lower()}.pth exists in the Models directory")
+                logger.error(f"Model file not found: {model_path}")
                 return None, None
-            
-            logger.info(f"Found model file of size: {os.path.getsize(model_path)} bytes")
-            
-            try:
-                # Try to load the model file
-                state_dict = torch.load(model_path, map_location=torch.device('cpu'))
-                logger.info("Successfully loaded model state dict")
-            except Exception as e:
-                logger.error(f"Error loading model file: {str(e)}")
-                return None, None
-            
-            # Create dataset parameters
+
+            # Create training dataset matching training configuration
+            df = pd.DataFrame({
+                'time_idx': range(150),  # More than max_encoder_length
+                'group': [company_code] * 150,
+                f'Close_{company_code}': [0.0] * 150,
+                f'High_{company_code}': [0.0] * 150,
+                f'Low_{company_code}': [0.0] * 150,
+                'year': [datetime.now().year] * 150,
+                'month': [datetime.now().month] * 150,
+                'day_of_week': [datetime.now().weekday()] * 150,
+                'MA7': [0.0] * 150,
+                'MA21': [0.0] * 150
+            })
+
             training = TimeSeriesDataSet(
-                data=pd.DataFrame({
-                    'time_idx': range(120),
-                    'group': [company_code] * 120,
-                    'Close': [0.0] * 120,
-                    'Open': [0.0] * 120,
-                    'High': [0.0] * 120,
-                    'Low': [0.0] * 120,
-                    'Volume': [0.0] * 120,
-                    'MA7': [0.0] * 120,
-                    'MA21': [0.0] * 120,
-                    'month': [1] * 120,
-                    'day_of_week': [1] * 120
-                }),
+                df,
                 time_idx="time_idx",
-                target="Close",
+                target=f"Close_{company_code}",
                 group_ids=["group"],
-                max_encoder_length=90,
+                min_encoder_length=60,
+                max_encoder_length=120,
                 max_prediction_length=30,
                 static_categoricals=["group"],
-                time_varying_known_reals=["month", "day_of_week"],
+                static_reals=["year"],
+                time_varying_known_reals=["time_idx", "month", "day_of_week"],
                 time_varying_unknown_reals=[
-                    "Close", "Open", "High", "Low", "Volume",
-                    "MA7", "MA21"
+                    f"High_{company_code}", 
+                    f"Low_{company_code}", 
+                    f"Close_{company_code}",
+                    "MA7", 
+                    "MA21"
                 ],
                 target_normalizer=GroupNormalizer(
                     groups=["group"],
                     transformation="softplus"
-                )
+                ),
+                add_relative_time_idx=True,
+                add_target_scales=True,
+                add_encoder_length=True,
+                allow_missing_timesteps=True
             )
-            
+
             # Initialize model
             model = TemporalFusionTransformer.from_dataset(
                 training,
                 learning_rate=0.001,
-                hidden_size=64,
-                attention_head_size=4,
-                dropout=0.3,
-                hidden_continuous_size=32,
-                loss=QuantileLoss()
+                hidden_size=128,
+                attention_head_size=8,
+                dropout=0.5,
+                hidden_continuous_size=64,
+                loss=QuantileLoss(),
+                reduce_on_plateau_patience=2,
+                reduce_on_plateau_reduction=2.0,
+                reduce_on_plateau_min_lr=1e-5,
+                optimizer="adam",
+                weight_decay=0.001,
+                lstm_layers=1
             )
-            
-            # Load the trained weights
-            model.load_state_dict(state_dict)
-            model.eval()
-            
-            logger.info("Successfully initialized and loaded model")
-            return model, training
+
+            try:
+                # Load state dict with proper device mapping
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                state_dict = torch.load(model_path, map_location=device)
+                model.load_state_dict(state_dict)
+                model = model.to(device)
+                model.eval()
+
+                logger.info(f"Model loaded successfully to {device}")
+                return model, training
+
+            except Exception as e:
+                logger.error(f"Error loading model weights: {str(e)}")
+                logger.exception("Full traceback:")
+                return None, None
 
         except Exception as e:
             logger.error(f"Error in load_model: {str(e)}")
             logger.exception("Full traceback:")
             return None, None
-
     def generate_predictions(self, model, training, data):
         """Generate predictions for the next 30 days"""
         try:
@@ -173,25 +218,32 @@ class StockPredictor:
             return None
 
     def create_graph(self, historical_data, predictions, company_code):
-        """Create visualization of historical data and predictions"""
         try:
             plt.figure(figsize=(12, 6))
             
-            # Plot historical data
+            # Plot historical data with dates
             historical_dates = historical_data['Date'].values[-30:]
             historical_prices = historical_data['Close'].values[-30:]
-            plt.plot(range(len(historical_dates)), historical_prices, 
-                    label='Historical', color='blue')
             
-            # Plot predictions
-            plt.plot(range(len(historical_dates)-1, len(historical_dates) + len(predictions)-1),
-                    predictions, label='Predicted', color='red', linestyle='--')
+            # Create date range for predictions
+            last_date = historical_dates[-1]
+            future_dates = pd.date_range(start=last_date, periods=len(predictions)+1)[1:]
+            
+            plt.plot(historical_dates, historical_prices, 
+                    label='Historical', color='blue', marker='o', markersize=4)
+            
+            plt.plot(future_dates, predictions,
+                    label='Predicted', color='red', linestyle='--', marker='x', markersize=4)
             
             plt.title(f'{self.COMPANIES[company_code]} Stock Price Prediction')
-            plt.xlabel('Days')
+            plt.xlabel('Date')
             plt.ylabel('Price (Normalized)')
             plt.legend()
             plt.grid(True)
+            
+            # Rotate x-axis labels for better readability
+            plt.xticks(rotation=45)
+            plt.tight_layout()
             
             # Convert plot to base64
             img = io.BytesIO()
@@ -202,4 +254,16 @@ class StockPredictor:
             return base64.b64encode(img.getvalue()).decode()
         except Exception as e:
             logger.error(f"Error creating graph: {str(e)}")
-            return None 
+            return None
+    def verify_model_files(self):
+        """Verify all model files exist"""
+        missing_models = []
+        for company in self.COMPANIES.keys():
+            model_path = os.path.join(self.models_dir, f'model_{company.lower()}.pth')
+            if not os.path.exists(model_path):
+                missing_models.append(company)
+        
+        if missing_models:
+            logger.error(f"Missing model files for: {', '.join(missing_models)}")
+            return False
+        return True

@@ -8,6 +8,13 @@ def run_tests():
     
     predictor = StockPredictor()
     
+    # Verify model files first
+    print("Checking model files...")
+    if not predictor.verify_model_files():
+        print("❌ Some model files are missing")
+        return
+    print("✅ All model files present")
+    
     print("1. Testing fetch_historical_data...")
     # Test fetch_historical_data
     predictor = StockPredictor()
