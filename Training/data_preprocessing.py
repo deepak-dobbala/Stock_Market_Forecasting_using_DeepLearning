@@ -249,40 +249,6 @@ def handle_outliers(df, columns=None, method='clip'):
 
 def create_lstm_model(sequence_length, n_features=1, units=50, dropout=0.2, learning_rate=0.001):
 
-    """
-
-    Create LSTM model for stock price prediction.
-
-    
-
-    Parameters:
-
-    -----------
-
-    sequence_length : int
-
-        Number of time steps to look back
-
-    n_features : int, optional (default=1)
-
-        Number of input features
-
-    units : int, optional (default=50)
-
-        Number of LSTM units
-
-    dropout : float, optional (default=0.2)
-
-        Dropout rate
-
-    learning_rate : float, optional (default=0.001)
-
-        Learning rate for Adam optimizer
-
-        
-
-    Returns:
-    """
 
     model = Sequential([
 
@@ -307,33 +273,8 @@ def create_lstm_model(sequence_length, n_features=1, units=50, dropout=0.2, lear
     return model
 def train_lstm_model(model, X_train, y_train, epochs=100, batch_size=32, 
                     validation_split=0.1, patience=10, verbose=1):
-    """
-    Train LSTM model with early stopping.
-    
-    Parameters:
-    -----------
-    model : tensorflow.keras.models.Sequential
-        LSTM model to train
-    X_train : numpy.ndarray
-        Training features
-    y_train : numpy.ndarray
-        Training target
-    epochs : int, optional (default=100)
-        Number of training epochs
-    batch_size : int, optional (default=32)
-        Batch size for training
-    validation_split : float, optional (default=0.1)
-        Proportion of training data to use for validation
-    patience : int, optional (default=10)
-        Number of epochs to wait before early stopping
-    verbose : int, optional (default=1)
-        Verbosity mode
-        
-    Returns:
-    --------
-    tensorflow.keras.callbacks.History
-        Training history
-    """
+   
+
     early_stopping = EarlyStopping(monitor='val_loss', patience=patience, 
                                  restore_best_weights=True)
     

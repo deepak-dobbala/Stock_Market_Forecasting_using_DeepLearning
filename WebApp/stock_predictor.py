@@ -84,16 +84,22 @@ class StockPredictor:
         """Prepare data for the model"""
         try:
             logger.info(f"Preparing data for {company_code}")
+            logger.info(f"Input data shape: {df.shape}")
+            
+            # Create a copy and reset index
+            df = df.copy()
+            df = df.reset_index(drop=True)
             
             # Add company code to column names
-            df = df.copy()
-            for col in ['Close', 'High', 'Low']:
-                df[f'{col}_{company_code}'] = df[col]
-                
+            df[f'Close_{company_code}'] = df['Close']
+            df[f'High_{company_code}'] = df['High']
+            df[f'Low_{company_code}'] = df['Low']
+            df['Open'] = df['Open']
+            df['Volume'] = df['Volume']
+            
             # Add time features
             df['time_idx'] = range(len(df))
             df['group'] = company_code
-            df['year'] = df['Date'].dt.year
             df['month'] = df['Date'].dt.month
             df['day_of_week'] = df['Date'].dt.dayofweek
             
@@ -101,8 +107,8 @@ class StockPredictor:
             df['MA7'] = df[f'Close_{company_code}'].rolling(window=7).mean()
             df['MA21'] = df[f'Close_{company_code}'].rolling(window=21).mean()
             
-            # Forward fill any missing values
-            df = df.fillna(method='ffill')
+            # Forward fill missing values
+            df = df.ffill()  # Using ffill() instead of fillna(method='ffill')
             
             logger.info(f"Final data shape: {df.shape}")
             return df
@@ -121,73 +127,71 @@ class StockPredictor:
                 logger.error(f"Model file not found: {model_path}")
                 return None, None
 
-            # Create training dataset matching training configuration
+            # Create sample data with correct structure
+            sample_length = 150
             df = pd.DataFrame({
-                'time_idx': range(150),  # More than max_encoder_length
-                'group': [company_code] * 150,
-                f'Close_{company_code}': [0.0] * 150,
-                f'High_{company_code}': [0.0] * 150,
-                f'Low_{company_code}': [0.0] * 150,
-                'year': [datetime.now().year] * 150,
-                'month': [datetime.now().month] * 150,
-                'day_of_week': [datetime.now().weekday()] * 150,
-                'MA7': [0.0] * 150,
-                'MA21': [0.0] * 150
+                'time_idx': range(sample_length),
+                'group': [company_code] * sample_length,
+                f'Close_{company_code}': [0.0] * sample_length,
+                f'High_{company_code}': [0.0] * sample_length,
+                f'Low_{company_code}': [0.0] * sample_length,
+                'Open': [0.0] * sample_length,
+                'Volume': [0.0] * sample_length,
+                'year': [datetime.now().year] * sample_length,
+                'month': [datetime.now().month] * sample_length,
+                'day_of_week': [datetime.now().weekday()] * sample_length,
+                'MA7': [0.0] * sample_length,
+                'MA21': [0.0] * sample_length
             })
 
+            # Updated TimeSeriesDataSet configuration
             training = TimeSeriesDataSet(
                 df,
                 time_idx="time_idx",
                 target=f"Close_{company_code}",
                 group_ids=["group"],
-                min_encoder_length=60,
-                max_encoder_length=120,
+                min_encoder_length=30,  # Reduced from 60
+                max_encoder_length=90,  # Reduced from 120
                 max_prediction_length=30,
                 static_categoricals=["group"],
-                static_reals=["year"],
-                time_varying_known_reals=["time_idx", "month", "day_of_week"],
+                time_varying_known_reals=["month", "day_of_week"],
                 time_varying_unknown_reals=[
                     f"High_{company_code}", 
                     f"Low_{company_code}", 
                     f"Close_{company_code}",
+                    "Open",
+                    "Volume",
                     "MA7", 
                     "MA21"
                 ],
                 target_normalizer=GroupNormalizer(
                     groups=["group"],
                     transformation="softplus"
-                ),
-                add_relative_time_idx=True,
-                add_target_scales=True,
-                add_encoder_length=True,
-                allow_missing_timesteps=True
+                )
             )
 
-            # Initialize model
+            # Initialize model with matched parameters
             model = TemporalFusionTransformer.from_dataset(
                 training,
                 learning_rate=0.001,
-                hidden_size=128,
-                attention_head_size=8,
-                dropout=0.5,
-                hidden_continuous_size=64,
+                hidden_size=64,
+                attention_head_size=4,
+                dropout=0.3,
+                hidden_continuous_size=32,
                 loss=QuantileLoss(),
-                reduce_on_plateau_patience=2,
-                reduce_on_plateau_reduction=2.0,
-                reduce_on_plateau_min_lr=1e-5,
-                optimizer="adam",
-                weight_decay=0.001,
-                lstm_layers=1
+                reduce_on_plateau_patience=4,
+                optimizer="ranger",
+                lstm_layers=2
             )
 
             try:
-                # Load state dict with proper device mapping
+                # Load model weights with proper device handling
                 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                 state_dict = torch.load(model_path, map_location=device)
                 model.load_state_dict(state_dict)
                 model = model.to(device)
                 model.eval()
-
+                
                 logger.info(f"Model loaded successfully to {device}")
                 return model, training
 
@@ -262,6 +266,9 @@ class StockPredictor:
             model_path = os.path.join(self.models_dir, f'model_{company.lower()}.pth')
             if not os.path.exists(model_path):
                 missing_models.append(company)
+                logger.error(f"Model file missing: {model_path}")
+            else:
+                logger.info(f"Model file found: {model_path}")
         
         if missing_models:
             logger.error(f"Missing model files for: {', '.join(missing_models)}")
