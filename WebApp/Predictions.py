@@ -202,7 +202,7 @@ def predict_future_prices(company_code, max_encoder_length=120, max_prediction_l
 
 # Example usage
 if __name__ == "__main__":
-    companies_list =['GOOGL','AAPL','IBM','AAZM']
+    companies_list =['GOOGL','AAPL','IBM','AMZN']
     company = 'AAPL'
     predictions = predict_future_prices(company, max_encoder_length=120, max_prediction_length=30)
     
